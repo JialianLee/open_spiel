@@ -181,6 +181,7 @@ class _CFRSolverBase(object):
     self._regret_matching_plus = regret_matching_plus
     self.nodes_touched = 0
     self.cumulative_rewards = np.zeros(self._num_players)
+    self.cumulative_rewards = np.zeros(self._num_players)
 
   def _initialize_info_state_nodes(self, state):
     """Initializes info_state_nodes.
@@ -245,6 +246,18 @@ class _CFRSolverBase(object):
     _update_average_policy(self._average_policy, self._info_state_nodes)
     return self._average_policy
 
+  def _compute_best_response_policy(self, player):
+    # current_policy = self.average_policy()
+    current_policy = self.current_policy()
+    if player is not None:
+      self.br = pyspiel_best_response.BestResponsePolicy(self._game, player, current_policy,
+                                                  self._root_node)
+    else:
+      self.br = {}
+      for p in range(self._num_players):
+        self.br.update(pyspiel_best_response.BestResponsePolicy(self_game, p, current_policy,
+                                                  self._root_node))
+
   def _compute_counterfactual_regret_for_player(self, state, policies,
                                                 reach_probabilities, player):
     """Increments the cumulative regrets and policy for `player`.
@@ -270,15 +283,14 @@ class _CFRSolverBase(object):
       return np.asarray(state.returns())
 
     if state.is_chance_node():
-      state_value = 0.0
       for action, action_prob in state.chance_outcomes():
         assert action_prob > 0
         new_state = state.child(action)
         new_reach_probabilities = reach_probabilities.copy()
         new_reach_probabilities[-1] *= action_prob
-        state_value += action_prob * self._compute_counterfactual_regret_for_player(
+        self._compute_counterfactual_regret_for_player(
             new_state, policies, new_reach_probabilities, player)
-      return state_value
+      return
  
     current_player = state.current_player()
     info_state = state.information_state_string(current_player)
@@ -288,19 +300,25 @@ class _CFRSolverBase(object):
     # The value we return here is not used in practice. If the conditional
     # statement is True, then the last taken action has probability 0 of
     # occurring, so the returned value is not impacting the parent node value.
+    # print("reach prob")
+    # print(reach_probabilities)
     if all(reach_probabilities[:-1] == 0):
+      # print("all zero")
       return np.zeros(self._num_players)
+    # print("")
     # if reach_probabilities[1 - current_player] == 0:
     #   return np.zeros(self._num_players)
 
     self.nodes_touched += 1
-    state_value = np.zeros(self._num_players)
 
     # The utilities of the children states are computed recursively. As the
     # regrets are added to the information state regrets for each state in that
     # information state, the recursive call can only be made once per child
     # state. Therefore, the utilities are cached.
-    children_utilities = {}
+    
+    # children_utilities = {}
+    state_value = 0
+    br_value = {}
 
     info_state_node = self._info_state_nodes[info_state]
     if policies is None:
@@ -312,14 +330,14 @@ class _CFRSolverBase(object):
       new_state = state.child(action)
       new_reach_probabilities = reach_probabilities.copy()
       new_reach_probabilities[current_player] *= action_prob
-      child_utility = self._compute_counterfactual_regret_for_player(
+      self._compute_counterfactual_regret_for_player(
           new_state,
           policies=policies,
           reach_probabilities=new_reach_probabilities,
           player=player)
-
-      state_value += action_prob * child_utility
-      children_utilities[action] = child_utility
+      if player is None or player == current_player:
+        br_value[action] = self.br.q_value(state, action)
+        state_value += action_prob * br_value[action]
 
     # If we are performing alternating updates, and the current player is not
     # the current_player, we skip the cumulative values update.
@@ -327,17 +345,17 @@ class _CFRSolverBase(object):
     # values.
     simulatenous_updates = player is None
     if not simulatenous_updates and current_player != player:
-      return state_value
+      return
+      # return state_value
 
     reach_prob = reach_probabilities[current_player]
-    counterfactual_reach_prob = (
-        np.prod(reach_probabilities[:current_player]) *
-        np.prod(reach_probabilities[current_player + 1:]))
-    state_value_for_player = state_value[current_player]
+    # counterfactual_reach_prob = (
+    #     np.prod(reach_probabilities[:current_player]) *
+    #     np.prod(reach_probabilities[current_player + 1:]))
+    total_reach_prob = np.prod(reach_probabilities)
 
     for action, action_prob in info_state_policy.items():
-      cfr_regret = counterfactual_reach_prob * (
-          children_utilities[action][current_player] - state_value_for_player)
+      cfr_regret = total_reach_prob * (br_value[action] - state_value)
 
       info_state_node.cumulative_regret[action] += cfr_regret
       if self._linear_averaging:
@@ -346,7 +364,7 @@ class _CFRSolverBase(object):
       else:
         info_state_node.cumulative_policy[action] += reach_prob * action_prob
 
-    return state_value
+    return
 
   def _get_infostate_policy(self, info_state_str):
     """Returns an {action: prob} dictionary for the policy on `info_state`."""
@@ -356,21 +374,6 @@ class _CFRSolverBase(object):
     return {
         action: prob_vec[action] for action in info_state_node.legal_actions
     }
-
-  def _compute_best_response_policy(self, player):
-    # current_policy = policy.PolicyFromCallable(
-    #     self._game,
-    #     lambda state: self._get_infostate_policy(state.information_state_string(
-    #     )))
-    current_policy = self.average_policy()
-    if player is not None:
-      self.br = pyspiel_best_response.BestResponsePolicy(self._game, player, current_policy,
-                                                  self._root_node)
-    else:
-      self.br = {}
-      for p in range(self._num_players):
-        self.br.update(pyspiel_best_response.BestResponsePolicy(self_game, p, current_policy,
-                                                  self._root_node))
 
   def _calculate_util(self, state, policies, reach_probabilities):
     if state.is_terminal():
@@ -501,6 +504,7 @@ class _CFRSolver(_CFRSolverBase):
     self._iteration += 1
     if self._alternating_updates:
       for player in range(self._game.num_players()):
+        self._compute_best_response_policy(player)
         self._compute_counterfactual_regret_for_player(
             self._root_node,
             policies=None,
@@ -510,6 +514,7 @@ class _CFRSolver(_CFRSolverBase):
           _apply_regret_matching_plus_reset(self._info_state_nodes)
         _update_current_policy(self._current_policy, self._info_state_nodes)
     else:
+      self._compute_best_response_policy(None)
       self._compute_counterfactual_regret_for_player(
           self._root_node,
           policies=None,
@@ -529,6 +534,7 @@ class _CFRSolver(_CFRSolverBase):
       reg += self.br.value(self._root_node)
     reg -= sum(self.cumulative_rewards) / self._iteration
     return reg
+
 
 class CFRPlusSolver(_CFRSolver):
   """CFR+ implementation.
@@ -589,3 +595,6 @@ class CFRSolver(_CFRSolver):
         regret_matching_plus=False,
         alternating_updates=True,
         linear_averaging=False)
+
+
+

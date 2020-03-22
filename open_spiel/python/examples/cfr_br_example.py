@@ -21,7 +21,7 @@ from __future__ import print_function
 from absl import app
 from absl import flags
 
-from open_spiel.python.algorithms import cfr
+from open_spiel.python.algorithms import cfr_br
 from open_spiel.python.algorithms import exploitability
 import pyspiel
 import os
@@ -38,41 +38,32 @@ flags.DEFINE_integer("print_freq", 5, "How often to print the exploitability")
 def main(_):
   game = pyspiel.load_game(FLAGS.game,
                            {"players": pyspiel.GameParameter(FLAGS.players)})
-  cfr_solver = cfr.CFRSolver(game)
+  cfr_solver = cfr_br.CFRBRSolver(game)
 
-  path_name = "../data/cfr_{}/".format(FLAGS.game)
+  path_name = "../data/cfr_br_{}/".format(FLAGS.game)
   if not os.path.exists(path_name):
       os.mkdir(path_name)
   file_name = path_name + "iter_{}_freq_{}_log.txt".format(FLAGS.iterations, FLAGS.print_freq)
   f = open(file_name, 'w')
   convs = []
-  regs = []
   cfr_nodes = []
 
   for i in range(FLAGS.iterations):
     cfr_solver.evaluate_and_update_policy()
     if i % FLAGS.print_freq == 0:
       conv = exploitability.exploitability(game, cfr_solver.average_policy())
-      reg = cfr_solver.get_regret()
 
       convs.append(conv)
       cfr_nodes.append(cfr_solver.nodes_touched)
-      regs.append(reg)
 
       print("Iteration {} exploitability {}".format(i, conv))
-      print("Current average regret {}".format(reg))
       print("Nodes touched {}".format(cfr_solver.nodes_touched))
       f.write("Iteration {} exploitability {}\n".format(i, conv))
-      f.write("Current average regret {}\n".format(reg))
       f.write("Nodes touched{}\n".format(cfr_solver.nodes_touched))
-
-      # print("Iteration {} exploitability {}".format(i, conv))
-      # print("Nodes touched {}".format(cfr_solver.nodes_touched))
-      # f.write("Iteration {} exploitability {}\n".format(i, conv))
-      # f.write("Nodes touched{}\n".format(cfr_solver.nodes_touched))
   np.savez(path_name + "iter_{}_freq_{}.npz".format(FLAGS.iterations, FLAGS.print_freq), 
-            convs=convs, cfr_nodes=cfr_nodes, regs=regs)
+            convs=convs, cfr_nodes=cfr_nodes)
   f.close()
+
 
 if __name__ == "__main__":
   app.run(main)
