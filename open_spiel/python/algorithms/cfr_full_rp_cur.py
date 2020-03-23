@@ -181,7 +181,6 @@ class _CFRSolverBase(object):
     self._regret_matching_plus = regret_matching_plus
     self.nodes_touched = 0
     self.cumulative_rewards = np.zeros(self._num_players)
-    self.cumulative_rewards = np.zeros(self._num_players)
 
   def _initialize_info_state_nodes(self, state):
     """Initializes info_state_nodes.
@@ -246,9 +245,13 @@ class _CFRSolverBase(object):
     _update_average_policy(self._average_policy, self._info_state_nodes)
     return self._average_policy
 
-  def _compute_best_response_policy(self, player):
-    # current_policy = self.average_policy()
-    current_policy = self.current_policy()
+  def _compute_best_response_policy(self, player, use_average=True):
+    if use_average:
+      _update_average_policy(self._average_policy, self._info_state_nodes)
+    current_policy = policy.PolicyFromCallable(
+        self._game,
+        lambda state: self._get_infostate_policy(state.information_state_string(
+        ), use_average))
     if player is not None:
       self.br = pyspiel_best_response.BestResponsePolicy(self._game, player, current_policy,
                                                   self._root_node)
@@ -280,7 +283,7 @@ class _CFRSolverBase(object):
       current policy defined by `self.Policy`.
     """
     if state.is_terminal():
-      return np.asarray(state.returns())
+      return
 
     if state.is_chance_node():
       for action, action_prob in state.chance_outcomes():
@@ -304,7 +307,7 @@ class _CFRSolverBase(object):
     # print(reach_probabilities)
     if all(reach_probabilities[:-1] == 0):
       # print("all zero")
-      return np.zeros(self._num_players)
+      return
     # print("")
     # if reach_probabilities[1 - current_player] == 0:
     #   return np.zeros(self._num_players)
@@ -366,10 +369,14 @@ class _CFRSolverBase(object):
 
     return
 
-  def _get_infostate_policy(self, info_state_str):
+  def _get_infostate_policy(self, info_state_str, use_average=False):
     """Returns an {action: prob} dictionary for the policy on `info_state`."""
     info_state_node = self._info_state_nodes[info_state_str]
-    prob_vec = self._current_policy.action_probability_array[
+    if use_average:
+      prob_vec = self._average_policy.action_probability_array[
+        info_state_node.index_in_tabular_policy]
+    else:
+      prob_vec = self._current_policy.action_probability_array[
         info_state_node.index_in_tabular_policy]
     return {
         action: prob_vec[action] for action in info_state_node.legal_actions
@@ -504,7 +511,7 @@ class _CFRSolver(_CFRSolverBase):
     self._iteration += 1
     if self._alternating_updates:
       for player in range(self._game.num_players()):
-        self._compute_best_response_policy(player)
+        self._compute_best_response_policy(player, use_average=False)
         self._compute_counterfactual_regret_for_player(
             self._root_node,
             policies=None,

@@ -246,9 +246,13 @@ class _CFRSolverBase(object):
     _update_average_policy(self._average_policy, self._info_state_nodes)
     return self._average_policy
 
-  def _compute_best_response_policy(self, player):
-    current_policy = self.average_policy()
-    # current_policy = self.current_policy()
+  def _compute_best_response_policy(self, player, use_average=True):
+    if use_average:
+      _update_average_policy(self._average_policy, self._info_state_nodes)
+    current_policy = policy.PolicyFromCallable(
+        self._game,
+        lambda state: self._get_infostate_policy(state.information_state_string(
+        ), use_average))
     if player is not None:
       self.br = pyspiel_best_response.BestResponsePolicy(self._game, player, current_policy,
                                                   self._root_node)
@@ -363,15 +367,19 @@ class _CFRSolverBase(object):
 
     return
 
-  def _get_infostate_policy(self, info_state_str):
+  def _get_infostate_policy(self, info_state_str, use_average=False):
     """Returns an {action: prob} dictionary for the policy on `info_state`."""
     info_state_node = self._info_state_nodes[info_state_str]
-    prob_vec = self._current_policy.action_probability_array[
+    if use_average:
+      prob_vec = self._average_policy.action_probability_array[
+        info_state_node.index_in_tabular_policy]
+    else:
+      prob_vec = self._current_policy.action_probability_array[
         info_state_node.index_in_tabular_policy]
     return {
         action: prob_vec[action] for action in info_state_node.legal_actions
     }
-
+  
   def _calculate_util(self, state, policies, reach_probabilities):
     if state.is_terminal():
       return np.asarray(state.returns())
