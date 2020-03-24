@@ -48,6 +48,19 @@ def main(_):
   convs = []
   regs = []
   cfr_nodes = []
+  info_regs = np.zeros(((FLAGS.iterations-1)// FLAGS.print_freq + 1, len(cfr_solver._info_state_nodes)))
+
+  # state = game.new_initial_state()
+  # while state.is_chance_node():
+  #   action, _ = state.chance_outcomes()[0]
+  #   state = state.child(action)
+  # print("state", state)
+  # current_player = state.current_player()
+  # info_state = state.information_state_string(current_player)
+  # info_state_node = cfr_solver._info_state_nodes.get(info_state)
+  # print("player", current_player)
+  # print("")
+  # reg_for_info = []
 
   for i in range(FLAGS.iterations):
     cfr_solver.evaluate_and_update_policy()
@@ -59,6 +72,11 @@ def main(_):
       cfr_nodes.append(cfr_solver.nodes_touched)
       regs.append(reg)
 
+      count = i // FLAGS.print_freq
+      for info in cfr_solver._info_state_nodes:
+        node = cfr_solver._info_state_nodes[info]
+        info_regs[count, node.index_in_tabular_policy] = max(node.cumulative_regret.values()) / (i+1)
+
       print("Iteration {} exploitability {}".format(i, conv))
       print("Current average regret {}".format(reg))
       print("Nodes touched {}".format(cfr_solver.nodes_touched))
@@ -67,6 +85,8 @@ def main(_):
       f.write("Nodes touched{}\n".format(cfr_solver.nodes_touched))
   np.savez(path_name + "iter_{}_freq_{}.npz".format(FLAGS.iterations, FLAGS.print_freq), 
             convs=convs, cfr_nodes=cfr_nodes, regs=regs)
+  np.save(path_name + "iter_{}_freq_{}_info_regs".format(FLAGS.iterations, FLAGS.print_freq), 
+            info_regs)
   f.close()
 
 if __name__ == "__main__":

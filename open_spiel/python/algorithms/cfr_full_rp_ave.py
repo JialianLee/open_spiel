@@ -181,7 +181,6 @@ class _CFRSolverBase(object):
     self._regret_matching_plus = regret_matching_plus
     self.nodes_touched = 0
     self.cumulative_rewards = np.zeros(self._num_players)
-    self.cumulative_rewards = np.zeros(self._num_players)
 
   def _initialize_info_state_nodes(self, state):
     """Initializes info_state_nodes.
@@ -284,7 +283,7 @@ class _CFRSolverBase(object):
       current policy defined by `self.Policy`.
     """
     if state.is_terminal():
-      return np.asarray(state.returns())
+      return
 
     if state.is_chance_node():
       for action, action_prob in state.chance_outcomes():
@@ -304,13 +303,16 @@ class _CFRSolverBase(object):
     # The value we return here is not used in practice. If the conditional
     # statement is True, then the last taken action has probability 0 of
     # occurring, so the returned value is not impacting the parent node value.
+    # print("reach prob")
+    # print(reach_probabilities)
     if all(reach_probabilities[:-1] == 0):
-      return np.zeros(self._num_players)
+      # print("all zero")
+      return
+    # print("")
     # if reach_probabilities[1 - current_player] == 0:
     #   return np.zeros(self._num_players)
 
     self.nodes_touched += 1
-    # state_value = np.zeros(self._num_players)
 
     # The utilities of the children states are computed recursively. As the
     # regrets are added to the information state regrets for each state in that
@@ -359,11 +361,11 @@ class _CFRSolverBase(object):
       cfr_regret = total_reach_prob * (br_value[action] - state_value)
 
       info_state_node.cumulative_regret[action] += cfr_regret
-      if self._linear_averaging:
-        info_state_node.cumulative_policy[
-            action] += self._iteration * reach_prob * action_prob
-      else:
-        info_state_node.cumulative_policy[action] += reach_prob * action_prob
+      # if self._linear_averaging:
+      #   info_state_node.cumulative_policy[
+      #       action] += self._iteration * reach_prob * action_prob
+      # else:
+      #   info_state_node.cumulative_policy[action] += reach_prob * action_prob
 
     return
 
@@ -379,61 +381,49 @@ class _CFRSolverBase(object):
     return {
         action: prob_vec[action] for action in info_state_node.legal_actions
     }
-  
-  def _calculate_util(self, state, policies, reach_probabilities):
-    if state.is_terminal():
-      return np.asarray(state.returns())
 
+  def _state_values(self, state, num_players, policy):
+    """Value of a state for every player given a policy."""
+    if state.is_terminal():
+      return np.array(state.returns())
+    else:
+      p_action = (
+          state.chance_outcomes() if state.is_chance_node() else
+          policy.action_probabilities(state).items())
+      return sum(prob * self._state_values(state.child(action), num_players, policy)
+                for action, prob in p_action)
+
+  def _update_cumulative_policy(self, state, reach_prob, player):
+    if state.is_terminal():
+      return
     if state.is_chance_node():
-      state_value = 0.0
-      for action, action_prob in state.chance_outcomes():
-        assert action_prob > 0
-        new_state = state.child(action)
-        new_reach_probabilities = reach_probabilities.copy()
-        new_reach_probabilities[-1] *= action_prob
-        state_value += self._calculate_util(
-            new_state, policies, new_reach_probabilities)
-      return state_value
- 
+      for action, _ in state.chance_outcomes():
+        self._update_cumulative_policy(state.child(action), reach_prob, player)
+      return
+
+    if reach_prob == 0:
+      return
+
     current_player = state.current_player()
     info_state = state.information_state_string(current_player)
 
-    # No need to continue on this history branch as no update will be performed
-    # for any player.
-    # The value we return here is not used in practice. If the conditional
-    # statement is True, then the last taken action has probability 0 of
-    # occurring, so the returned value is not impacting the parent node value.
-    if all(reach_probabilities[:-1] == 0):
-      return np.zeros(self._num_players)
-    # if reach_probabilities[1 - current_player] == 0:
-    #   return np.zeros(self._num_players)
+    if current_player == player:
+      info_state_node = self._info_state_nodes[info_state]
+      info_state_policy = self._get_infostate_policy(info_state)    
 
-    self.nodes_touched += 1
-    state_value = np.zeros(self._num_players)
-
-    # The utilities of the children states are computed recursively. As the
-    # regrets are added to the information state regrets for each state in that
-    # information state, the recursive call can only be made once per child
-    # state. Therefore, the utilities are cached.
-    
-    # children_utilities = {}
-
-    info_state_node = self._info_state_nodes[info_state]
-    if policies is None:
-      info_state_policy = self._get_infostate_policy(info_state)
-    else:
-      info_state_policy = policies[current_player](info_state)
     for action in state.legal_actions():
-      action_prob = info_state_policy.get(action, 0.)
-      new_state = state.child(action)
-      new_reach_probabilities = reach_probabilities.copy()
-      new_reach_probabilities[current_player] *= action_prob
-      state_value += action_prob * self._calculate_util(
-          new_state,
-          policies=policies,
-          reach_probabilities=new_reach_probabilities)
-    return state_value
+      if current_player == player:
+        new_reach_prob = reach_prob * info_state_policy.get(action, 0.)
+        self._update_cumulative_policy(state.child(action), new_reach_prob, player)
 
+        if self._linear_averaging:
+          info_state_node.cumulative_policy[
+              action] += self._iteration * new_reach_prob
+        else:
+          info_state_node.cumulative_policy[action] += new_reach_prob
+
+      else:
+        self._update_cumulative_policy(state.child(action), reach_prob, player)
 
 def _regret_matching(cumulative_regrets, legal_actions):
   """Returns an info state policy by applying regret-matching.
@@ -509,7 +499,7 @@ class _CFRSolver(_CFRSolverBase):
     self._iteration += 1
     if self._alternating_updates:
       for player in range(self._game.num_players()):
-        self._compute_best_response_policy(player)
+        self._compute_best_response_policy(player, use_average=True)
         self._compute_counterfactual_regret_for_player(
             self._root_node,
             policies=None,
@@ -518,6 +508,7 @@ class _CFRSolver(_CFRSolverBase):
         if self._regret_matching_plus:
           _apply_regret_matching_plus_reset(self._info_state_nodes)
         _update_current_policy(self._current_policy, self._info_state_nodes)
+        self._update_cumulative_policy(self._root_node, 1., player)
     else:
       self._compute_best_response_policy(None)
       self._compute_counterfactual_regret_for_player(
@@ -528,16 +519,14 @@ class _CFRSolver(_CFRSolverBase):
       if self._regret_matching_plus:
         _apply_regret_matching_plus_reset(self._info_state_nodes)
       _update_current_policy(self._current_policy, self._info_state_nodes)
-    self.cumulative_rewards += self._calculate_util(self._root_node,
-                                policies=None,
-                                reach_probabilities=np.ones(self._game.num_players() + 1))
+    self.cumulative_rewards += self._state_values(self._root_node, self._num_players, self._current_policy)
 
   def get_regret(self):
-    reg = 0.0
+    reg = np.zeros(self._num_players)
     for player in range(self._num_players):
       self._compute_best_response_policy(player)
-      reg += self.br.value(self._root_node)
-    reg -= sum(self.cumulative_rewards) / self._iteration
+      reg[player] = self.br.value(self._root_node)
+    reg -= self.cumulative_rewards / self._iteration
     return reg
 
 
